@@ -8,7 +8,8 @@ class AppleDocsMcp < Formula
   # Source-build path for contributors / TUI work / pre-release testing.
   # `pnpm` is only needed when building from source — keep it inside the
   # head block so stable installs don't pull a build-only dep.
-  head "https://github.com/adv3nt3/apple-docs-mcp.git", branch: "main" do
+  head do
+    url "https://github.com/adv3nt3/apple-docs-mcp.git", branch: "main"
     depends_on "pnpm" => :build
   end
 
