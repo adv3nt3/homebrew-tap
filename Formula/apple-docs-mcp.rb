@@ -6,35 +6,50 @@ class AppleDocsMcp < Formula
   license "MIT"
   head "https://github.com/adv3nt3/apple-docs-mcp.git", branch: "main"
 
-  depends_on "node"
   depends_on "pnpm" => :build
+  depends_on "node"
 
   def install
-    # Install all deps (build needs typescript, jest types, etc.) and compile.
-    system "pnpm", "install", "--frozen-lockfile"
+    # Install all deps (build needs typescript) and compile. --ignore-scripts
+    # skips esbuild / unrs-resolver native-build steps that pnpm 10 otherwise
+    # rejects in a non-interactive context — those are dev-only optimizations
+    # (used by jest/ESLint) and aren't needed by `pnpm run build` (just tsc
+    # + cp data).
+    system "pnpm", "install", "--frozen-lockfile", "--ignore-scripts"
     system "pnpm", "run", "build"
 
     # Re-install with --prod so node_modules is the runtime tree only.
-    rm_rf "node_modules"
+    rm_r "node_modules"
     system "pnpm", "install", "--frozen-lockfile", "--prod", "--ignore-scripts"
 
     # Ship the compiled JS + bundled WWDC corpus + production node_modules.
     libexec.install Dir["dist/*"]
     libexec.install "node_modules"
 
-    # Wrapper shim points at the compiled entry; node from this formula is on PATH.
-    (bin/"apple-docs-mcp").write_env_script libexec/"index.js",
-                                            PATH: "#{Formula["node"].opt_bin}:$PATH"
+    # Wrapper shim explicitly invokes node on the compiled entry. Using a
+    # custom shim instead of write_env_script because the entry .js file isn't
+    # marked executable in the build output (shebang only), so a direct exec
+    # would fail with EACCES.
+    (bin/"apple-docs-mcp").write <<~SHIM
+      #!/bin/bash
+      exec "#{Formula["node"].opt_bin}/node" "#{libexec}/index.js" "$@"
+    SHIM
+    chmod 0755, bin/"apple-docs-mcp"
   end
 
   test do
-    # Server is stdio MCP — sending an `initialize` JSON-RPC request and
-    # checking for a well-formed response covers boot + transport + tool registry.
-    request = <<~JSON
-      {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"brew-test","version":"0"}}}
-    JSON
-    output = pipe_output("#{bin}/apple-docs-mcp", request, 0)
-    assert_match(/"result"/, output)
-    assert_match(/"serverInfo"/, output)
+    # Cheap check: the wrapper exists and is executable.
+    assert_predicate bin/"apple-docs-mcp", :executable?
+
+    # Construction smoke: import the compiled module under NODE_ENV=test so
+    # the auto-`run()` block in src/index.ts is skipped, and the registerTool
+    # wiring goes all the way through (Zod schema generation, tool registry).
+    # If any imported handler throws at module load (broken require, missing
+    # data file), this surfaces it. Doing this instead of a stdio init/EOF
+    # round-trip because the server schedules a setInterval for cache refresh
+    # and otherwise never exits — `pipe_output` would hang under brew test.
+    ENV["NODE_ENV"] = "test"
+    system Formula["node"].opt_bin/"node", "--input-type=module", "-e",
+           "import('#{libexec}/index.js').then(m => { new m.default(); }).catch(e => { console.error(e); process.exit(1); });"
   end
 end
