@@ -49,7 +49,14 @@ class AppleDocsMcp < Formula
     # round-trip because the server schedules a setInterval for cache refresh
     # and otherwise never exits — `pipe_output` would hang under brew test.
     ENV["NODE_ENV"] = "test"
-    system Formula["node"].opt_bin/"node", "--input-type=module", "-e",
-           "import('#{libexec}/index.js').then(m => { new m.default(); }).catch(e => { console.error(e); process.exit(1); });"
+    # Explicit process.exit(0) after construction: registerAllTools / McpServer
+    # leaves something on the event loop that prevents natural exit, and we
+    # don't want brew test to hit its 5-minute timeout on a green smoke.
+    smoke = <<~JS
+      import('#{libexec}/index.js')
+        .then(m => { new m.default(); process.exit(0); })
+        .catch(e => { console.error(e); process.exit(1); });
+    JS
+    system Formula["node"].opt_bin/"node", "--input-type=module", "-e", smoke
   end
 end
