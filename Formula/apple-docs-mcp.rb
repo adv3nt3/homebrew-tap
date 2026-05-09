@@ -1,35 +1,40 @@
 class AppleDocsMcp < Formula
   desc "MCP server for Apple Developer Documentation, framework APIs, and WWDC videos"
   homepage "https://github.com/adv3nt3/apple-docs-mcp"
-  url "https://github.com/adv3nt3/apple-docs-mcp/archive/refs/tags/v1.2.0.tar.gz"
-  sha256 "df38c33f54a4ae988882b735bea4787c9efa12626ac89e522026c88c5d11fb00"
+  url "https://github.com/adv3nt3/apple-docs-mcp/releases/download/v1.3.0/apple-docs-mcp-1.3.0.tar.gz"
+  sha256 "ad5f970e09434e25a7d72feb0a01444d315ffd676a73ecaad5296c057911549b"
   license "MIT"
-  head "https://github.com/adv3nt3/apple-docs-mcp.git", branch: "main"
 
-  depends_on "pnpm" => :build
+  # Source-build path for contributors / TUI work / pre-release testing.
+  # `pnpm` is only needed when building from source — keep it inside the
+  # head block so stable installs don't pull a build-only dep.
+  head "https://github.com/adv3nt3/apple-docs-mcp.git", branch: "main" do
+    depends_on "pnpm" => :build
+  end
+
   depends_on "node"
 
   def install
-    # Install all deps (build needs typescript) and compile. --ignore-scripts
-    # skips esbuild / unrs-resolver native-build steps that pnpm 10 otherwise
-    # rejects in a non-interactive context — those are dev-only optimizations
-    # (used by jest/ESLint) and aren't needed by `pnpm run build` (just tsc
-    # + cp data).
-    system "pnpm", "install", "--frozen-lockfile", "--ignore-scripts"
-    system "pnpm", "run", "build"
+    if build.head?
+      # Source build: same flow the pre-bottle formula used.
+      # --ignore-scripts skips esbuild / unrs-resolver native postinstalls
+      # (devDep-only optimisations PNPM 10 otherwise rejects non-interactively).
+      system "pnpm", "install", "--frozen-lockfile", "--ignore-scripts"
+      system "pnpm", "run", "build"
+      rm_r "node_modules"
+      system "pnpm", "install", "--frozen-lockfile", "--prod", "--ignore-scripts"
+      libexec.install Dir["dist/*"]
+      libexec.install "node_modules"
+    else
+      # Bottle: tarball already contains compiled dist/* + production
+      # node_modules at top level. Built by .github/workflows/release.yml
+      # in the apple-docs-mcp repo (Package bottle tarball step).
+      libexec.install Dir["*"]
+    end
 
-    # Re-install with --prod so node_modules is the runtime tree only.
-    rm_r "node_modules"
-    system "pnpm", "install", "--frozen-lockfile", "--prod", "--ignore-scripts"
-
-    # Ship the compiled JS + bundled WWDC corpus + production node_modules.
-    libexec.install Dir["dist/*"]
-    libexec.install "node_modules"
-
-    # Wrapper shim explicitly invokes node on the compiled entry. Using a
-    # custom shim instead of write_env_script because the entry .js file isn't
-    # marked executable in the build output (shebang only), so a direct exec
-    # would fail with EACCES.
+    # Custom shim — dist/index.js has a shebang but isn't chmod +x in the
+    # build output, so a direct exec would EACCES. Avoiding write_env_script
+    # for the same reason.
     (bin/"apple-docs-mcp").write <<~SHIM
       #!/bin/bash
       exec "#{Formula["node"].opt_bin}/node" "#{libexec}/index.js" "$@"
@@ -41,17 +46,11 @@ class AppleDocsMcp < Formula
     # Cheap check: the wrapper exists and is executable.
     assert_predicate bin/"apple-docs-mcp", :executable?
 
-    # Construction smoke: import the compiled module under NODE_ENV=test so
-    # the auto-`run()` block in src/index.ts is skipped, and the registerTool
-    # wiring goes all the way through (Zod schema generation, tool registry).
-    # If any imported handler throws at module load (broken require, missing
-    # data file), this surfaces it. Doing this instead of a stdio init/EOF
-    # round-trip because the server schedules a setInterval for cache refresh
-    # and otherwise never exits — `pipe_output` would hang under brew test.
+    # Construction smoke under NODE_ENV=test (skips the auto-`run()` block in
+    # src/index.ts). Explicit process.exit(0) — registerAllTools/McpServer
+    # leaves something on the event loop that prevents natural exit; without
+    # exit, brew test hangs to its 5-minute timeout.
     ENV["NODE_ENV"] = "test"
-    # Explicit process.exit(0) after construction: registerAllTools / McpServer
-    # leaves something on the event loop that prevents natural exit, and we
-    # don't want brew test to hit its 5-minute timeout on a green smoke.
     smoke = <<~JS
       import('#{libexec}/index.js')
         .then(m => { new m.default(); process.exit(0); })
