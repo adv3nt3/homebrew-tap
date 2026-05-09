@@ -5,13 +5,13 @@ class Cupertino < Formula
   version "1.1.0-adv3nt3.1"
   sha256 "c451d20cbd6009cf60ffe3a97065ac106d8d83e5ded0f0a37e008101b40bf66a"
   license "MIT"
-  head "https://github.com/adv3nt3/cupertino.git", branch: "main"
 
-  depends_on macos: :sequoia
-
-  on_head do
+  head do
+    url "https://github.com/adv3nt3/cupertino.git", branch: "main"
     depends_on xcode: ["16.0", :build]
   end
+
+  depends_on macos: :sequoia
 
   def install
     if build.head?
